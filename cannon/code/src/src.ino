@@ -1,0 +1,241 @@
+#include <ESP32Servo.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include "USBHID.h"
+#include "USBCDC.h"
+#include <RingBuf.h>
+#include "motion.hpp"
+
+#define SERIAL_PORT Serial
+
+Servo servoYaw, servoPitch;
+const int servoPinYaw = 15;   // 舵机信号接GPIO10
+const int servoPinPitch = 16; // 舵机信号接GPIO10
+const int laserPin = 17;      // 舵机信号接GPIO10
+
+#define CONSTRAINT_SERVO_YAW(a) (a < 0 ? 0 : (a > 180 ? 180 : a))
+#define CONSTRAINT_SERVO_PITCH(a) (a < 90 ? 90 : (a > 180 ? 180 : a))
+int16_t YawSet = 90, PitchSet = 160;
+int16_t YawSetLast = 90, PitchSetLast = 160;
+RingBuf<uint8_t, 256> uartBuff;
+motion myMotion(0.01);
+
+#pragma pack(1)
+struct attFrame_T
+{
+  uint8_t head;
+  float att[3]; // pitch roll yaw
+  float acc[3]; // x y z
+  uint8_t crc;
+  uint8_t tail;
+};
+#pragma pack()
+
+struct attFrame_T imu;
+bool waitInit = false;
+float refYaw;
+bool laserOpen = false;
+
+esp_now_recv_cb_t cb;
+
+// CDC回调函数
+// void onSerialReceive()
+// {
+//   // while (Serial1.available())
+//   // {
+//   //   char c = Serial1.read();
+//   //   uartBuff.push(c);
+//   // }
+// }
+
+// 全局变量：标记是否有新帧（线程安全）
+portMUX_TYPE uart0_mux = portMUX_INITIALIZER_UNLOCKED;
+bool uart0_new_frame_flag = false;
+
+void setup()
+{
+  SERIAL_PORT.begin(115200);
+  while (!SERIAL_PORT)
+  {
+  };
+  // Serial1.begin(115200, SERIAL_8N1, 10, 11);
+  // Serial1.onReceive(onSerialReceive);
+
+  WiFi.mode(WIFI_STA); // ESP-NOW需要WiFi处于STA模式
+  // WiFi.channel(6); // 固定信道6，避免自动信道不匹配
+  //  初始化ESP-NOW
+  delay(2000);
+  if (esp_now_init() != ESP_OK)
+  {
+    SERIAL_PORT.println("ESP-NOW初始化失败");
+    return;
+  }
+  esp_now_register_recv_cb(OnDataRecv);
+
+  SERIAL_PORT.println(WiFi.macAddress());
+
+  servoYaw.attach(servoPinYaw);
+  servoPitch.attach(servoPinPitch);
+
+  servoYaw.write(YawSet);
+  servoPitch.write(PitchSet);
+
+  pinMode(laserPin, OUTPUT);
+  digitalWrite(laserPin, HIGH);
+}
+
+unsigned long last_update;
+
+// const esp_now_recv_info_t *
+void OnDataRecv(const esp_now_recv_info_t * esp_now_info, const uint8_t *data, int data_len)
+{
+  // Serial.print("收到数据，长度: ");
+  // Serial.println(len);
+  // Serial.println();
+  for (size_t i = 0; i < data_len; i++)
+  {
+    uartBuff.push(data[i]);
+  }
+}
+
+void loop()
+{
+  unsigned long now = millis();
+  // 每10ms左右更新一次（非阻塞，允许±1ms误差）
+  if (now - last_update >= 20)
+  {
+    last_update = now;
+
+    // YawSet = filter.getYaw() - 180 + 90;
+    // YawSet = CONSTRAINT_SERVO_YAW(YawSet);
+    // servoYaw.write(YawSet);
+  }
+  else
+  {
+    // SERIAL_PORT.println("Waiting for data");
+  }
+
+  if (uartBuff.size() >= sizeof(attFrame_T))
+  {
+    uint8_t head, tail;
+    uint8_t frame[50];
+    struct attFrame_T pack;
+
+    uartBuff.peek(head, 0);
+    uartBuff.peek(tail, sizeof(pack) - 1);
+    if (head == 0xA5 && tail == 0x5A)
+    {
+      // SERIAL_PORT.printf("peek :");
+      for (uint16_t ii = 0; ii < sizeof(pack); ii++)
+      {
+        // uartBuff.peek(head, 0);
+        // SERIAL_PORT.printf("%x ", head);
+        uartBuff.pop(frame[ii]);
+      }
+      memcpy(&pack, frame, sizeof(pack));
+      uint8_t check = 0;
+      check = crc8((uint8_t *)&pack, sizeof(pack) - 2);
+      if (check = pack.crc)
+      {
+        memcpy(&imu, &pack, sizeof(attFrame_T));
+
+        if (!waitInit)
+        {
+          waitInit = true;
+          refYaw = imu.att[2];
+        }
+
+        float from_angle = imu.att[2], to_angle = refYaw;
+        if (from_angle < 0)
+          from_angle += 360.0;
+        if (to_angle < 0)
+          to_angle += 360.0;
+        // 计算带符号的原始差值
+        float delta = to_angle - from_angle;
+        // 转换为-180~180°范围
+        if (delta > 180)
+        {
+          delta -= 360;
+        }
+        else if (delta < -180)
+        {
+          delta += 360;
+        }
+        YawSet = 90 + delta;
+        YawSet = CONSTRAINT_SERVO_YAW(YawSet);
+        PitchSet = 160 - (imu.att[0]);
+        PitchSet = CONSTRAINT_SERVO_PITCH(PitchSet);
+
+        if (imu.att[0] < 15)
+        {
+          YawSet = 0;
+          PitchSet = 160;
+          servoYaw.write(YawSet);
+          servoPitch.write(PitchSet);
+        }
+        else
+        {
+          if (abs(YawSet - YawSetLast) > 1)
+          {
+            servoYaw.write(YawSet);
+            YawSetLast = YawSet;
+          }
+          if (abs(PitchSet - PitchSetLast) > 1)
+          {
+            servoPitch.write(PitchSet);
+            PitchSetLast = PitchSet;
+          }
+        }
+
+        SERIAL_PORT.printf("servo set %d, %d\n", YawSet, PitchSet);
+
+        Motion_E detect = myMotion.update(imu.att, imu.acc);
+        switch (detect)
+        {
+        case MOTION_NONE:
+          break;
+        case MOTION_FRONT_BACK:
+          digitalWrite(laserPin, LOW);
+          break;
+        case MOTION_LEFT_RIGHT:
+          digitalWrite(laserPin, HIGH);
+          break;
+        default:
+          break;
+        }
+
+        // SERIAL_PORT.printf("rx 1 pack %f, %f, %f, %f, ctrl: %d %d\n", refYaw, imu.att[0], imu.att[1], imu.att[2], YawSet, PitchSet);
+      }
+      else
+      {
+        // SERIAL_PORT.println("frame error");
+        uartBuff.pop(head);
+      }
+    }
+    else
+    {
+      uartBuff.pop(head);
+    }
+  }
+}
+
+uint8_t crc8(uint8_t *data, uint8_t len)
+{
+  uint8_t crc = 0x00;
+  for (uint8_t i = 0; i < len; i++)
+  {
+    crc ^= data[i];
+    for (uint8_t j = 0; j < 8; j++)
+    {
+      if (crc & 0x80)
+      {
+        crc = (crc << 1) ^ 0x31; // 多项式0x31 (x8+x5+x4+1)
+      }
+      else
+      {
+        crc <<= 1;
+      }
+    }
+  }
+  return crc;
+}

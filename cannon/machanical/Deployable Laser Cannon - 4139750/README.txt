@@ -1,0 +1,4 @@
+Deployable Laser Cannon by Davewoodrum on Thingiverse: https://www.thingiverse.com/thing:4139750
+
+Summary:
+A big ol' laser cannon for your tabletop gaming battlefields. Perfect for sci fi, cyberpunk, space opera, super hero, post apocalypse, etc. Designed for 28mm miniature gaming, this cannon is bigger than the average figure. Dimensions are: 38mmx80mmx57mm. Want more stuff for your game experience? Please check out my brand's products at Drivethrurpg:https://www.drivethrurpg.com/browse/pub/3692/Fishwife-GamesWant more stuff here? Please consider leaving a tip as it encourages me to put up more stuff on Thingiverse.
