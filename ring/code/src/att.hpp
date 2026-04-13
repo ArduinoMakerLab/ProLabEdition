@@ -1,6 +1,6 @@
 #include <math.h>
 
-#define DCM_KP_MAG 1.000f // 磁力计补偿陀螺仪PI参数1.00
+#define DCM_KP_MAG 10.000f // 磁力计补偿陀螺仪PI参数1.00
 #define DCM_KI_MAG 0.000f // 0
 
 #define DCM_KP_ACC 0.600f // 加速度补偿陀螺仪PI参数  0.600

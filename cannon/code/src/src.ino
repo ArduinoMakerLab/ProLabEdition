@@ -166,28 +166,29 @@ void loop()
         PitchSet = 160 - (imu.att[0]);
         PitchSet = CONSTRAINT_SERVO_PITCH(PitchSet);
 
-        if (imu.att[0] < 15)
+        if (imu.att[0] < -80)
         {
           YawSet = 0;
           PitchSet = 160;
           servoYaw.write(YawSet);
           servoPitch.write(PitchSet);
+          refYaw = imu.att[2];
         }
         else
         {
-          if (abs(YawSet - YawSetLast) > 1)
+          //if (abs(YawSet - YawSetLast) > 1)
           {
             servoYaw.write(YawSet);
             YawSetLast = YawSet;
           }
-          if (abs(PitchSet - PitchSetLast) > 1)
+          //if (abs(PitchSet - PitchSetLast) > 1)
           {
             servoPitch.write(PitchSet);
             PitchSetLast = PitchSet;
           }
         }
 
-        SERIAL_PORT.printf("servo set %d, %d\n", YawSet, PitchSet);
+        SERIAL_PORT.printf("servo set %d, %d, ref %f %f ,att %f \n", YawSet, PitchSet, refYaw, delta, imu.att[2]);
 
         Motion_E detect = myMotion.update(imu.att, imu.acc);
         switch (detect)

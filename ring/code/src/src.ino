@@ -232,6 +232,7 @@ unsigned long last_update = 0;
 int16_t maxX = -32767, maxY = -32767, maxZ = -32767;
 int16_t minX = 32767, minY = 32767, minZ = 32767;
 float offsetX = 0, offsetY = 0, offsetZ = 0;
+float zoomX = 1, zoomY = 1, zoomZ = 1;
 // float calibX = 1, calibY = 1, calibZ = 1;
 
 void loop()
@@ -267,12 +268,25 @@ void loop()
       offsetY = (float)(maxY - minY) / 2.0 + minY;
       offsetZ = (float)(maxZ - minZ) / 2.0 + minZ;
 
-      filter.update(myICM.gyrX(), myICM.gyrY(), myICM.gyrZ(),
-                    myICM.accX(), myICM.accY(), myICM.accZ(),
-                    myICM.magX() + 7.5, -(myICM.magY() + 29), -(myICM.magZ() - 70));
+      float zoom = 0;
+      zoom = (maxX - minX);
+      zoom = zoom > (maxY - minY) ? zoom : (maxY - minY);
+      zoom = zoom > (maxZ - minZ) ? zoom : (maxZ - minZ);
+      zoomX = zoom / (maxX - minX);
+      zoomY = zoom / (maxY - minY);
+      zoomZ = zoom / (maxZ - minZ);
+      if(zoomX < 0.9 || zoomX > 1.1)
+        zoomX = 1;//wait mag valid
+      if(zoomY < 0.9 || zoomY > 1.1)
+        zoomY = 1;//wait mag valid
+      if(zoomZ < 0.9 || zoomZ > 1.1)
+        zoomZ = 1;//wait mag valid
+      // filter.update(myICM.gyrX(), myICM.gyrY(), myICM.gyrZ(),
+      //               myICM.accX(), myICM.accY(), myICM.accZ(),
+      //               myICM.magX() + 7.5, -(myICM.magY() + 29), -(myICM.magZ() - 70));
       myAtt.update(DEGREES_TO_RADIANS(myICM.gyrY()), DEGREES_TO_RADIANS(myICM.gyrX()), -DEGREES_TO_RADIANS(myICM.gyrZ()),
                    myICM.accY(), myICM.accX(), -myICM.accZ(),
-                   -(myICM.magY() + 11), myICM.magX() - 7.5, -(myICM.magZ() - 26), true, 0.01);
+                   -(myICM.magY() - offsetY) , (myICM.magX() - offsetX)  , -(myICM.magZ() - offsetZ) , false, 0.01);
       // printScaledAGMT(&myICM);      // This function takes into account the scale settings from when the measurement was made to calculate the values with units
       // Serial.println(now);
       // 1. 获取本体加速度（已转换为m/s²，包含重力）
@@ -299,7 +313,7 @@ void loop()
       float ay_enu = cosP * sinY * ax_no_g + (sinR * sinP * sinY + cosR * cosY) * ay_no_g + (cosR * sinP * sinY - sinR * cosY) * az_no_g;
       float az_enu = -sinP * ax_no_g + sinR * cosP * ay_no_g + cosR * cosP * az_no_g;
 
-      SERIAL_PORT.printf("att %f, %f, %f. acc %f, %f, %f\n", myAtt.Pitch, myAtt.Roll, myAtt.Yaw, ax_enu, ay_enu, az_enu);
+      SERIAL_PORT.printf("att %f, %f, %f. gyro %f, %f, %f, zoom %f, %f, %f\n", myAtt.Pitch, myAtt.Roll, myAtt.Yaw, myICM.gyrX(), myICM.gyrY(), myICM.gyrZ(), zoomX, zoomY, zoomZ);
 
       memset(&send, 0, sizeof(send));
       send.head = 0xA5;
