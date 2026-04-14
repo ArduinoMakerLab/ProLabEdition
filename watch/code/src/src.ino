@@ -10,7 +10,6 @@
  * Distributed as-is; no warranty is given.
  ***************************************************************/
 #include "ICM_20948.h" // Click here to get the library: http://librarymanager/All#SparkFun_ICM_20948_IMU
-#include "MahonyAHRS.hpp"
 #include <WiFi.h>
 #include <esp_now.h>
 #include "USBCDC.h"
@@ -36,7 +35,6 @@ ICM_20948_SPI myICM; // If using SPI create an ICM_20948_SPI object
 ICM_20948_I2C myICM; // Otherwise create an ICM_20948_I2C object
 #endif
 
-Mahony filter;
 att myAtt;
 // OWN 0xE8, 0x3D, 0xC1, 0x82, 0x48, 0x00
 uint8_t cannonMAC[] = {0x14, 0xC1, 0x9F, 0x28, 0x8D, 0x88};
@@ -55,12 +53,6 @@ struct attFrame_T
 struct attFrame_T send;
 uint32_t waitInit = 0;
 
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
-{
-  // Serial.print("发送状态: ");
-  // Serial.println(status == ESP_NOW_SEND_SUCCESS ? "成功" : "失败");
-}
-
 void setup()
 {
   // SERIAL_PORT.begin(115200, SERIAL_8N1, 21, 20);
@@ -72,25 +64,22 @@ void setup()
   };
 
   // WiFi.begin();
-  WiFi.mode(WIFI_STA); // ESP-NOW需要WiFi处于STA模式
+  WiFi.mode(WIFI_STA); // ESP-NOW need config WIFI-STA mode
   delay(2000);
-  // WiFi.channel(6); // 固定信道6，避免自动信道不匹配
-  //  初始化ESP-NOW
+  //  ESP-NOW init
   if (esp_now_init() != ESP_OK)
   {
-    SERIAL_PORT.println("ESP-NOW初始化失败");
+    SERIAL_PORT.println("ESP-NOW init error");
     return;
   }
-  // esp_now_register_send_cb(OnDataSent);
-
-  //  添加接收端为对等节点
+  //  add peer
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, cannonMAC, 6);
   peerInfo.channel = 0;
-  peerInfo.encrypt = false; // 不加密（加密会增加延迟）
+  peerInfo.encrypt = false;
   if (esp_now_add_peer(&peerInfo) != ESP_OK)
   {
-    SERIAL_PORT.println("添加对等节点失败");
+    SERIAL_PORT.println("add peer error");
     return;
   }
 
@@ -102,8 +91,6 @@ void setup()
   WIRE_PORT.begin(3, 2);
   // WIRE_PORT.setClock(400000);
 #endif
-
-  // myICM.enableDebugging(); // Uncomment this line to enable helpful debug messages on Serial
 
   bool initialized = false;
   while (!initialized)
@@ -225,14 +212,12 @@ void setup()
   SERIAL_PORT.println();
   SERIAL_PORT.println(F("Configuration complete!"));
 
-  filter.begin(100); // filter to expect 100 measurements per second
 }
 
 unsigned long last_update = 0;
 int16_t maxX = -32767, maxY = -32767, maxZ = -32767;
 int16_t minX = 32767, minY = 32767, minZ = 32767;
 float offsetX = 0, offsetY = 0, offsetZ = 0;
-float zoomX = 1, zoomY = 1, zoomZ = 1;
 // float calibX = 1, calibY = 1, calibZ = 1;
 
 void loop()
@@ -243,7 +228,7 @@ void loop()
   if (myICM.dataReady())
   {
     unsigned long now = millis();
-    // 每10ms左右更新一次（非阻塞，允许±1ms误差）
+    // 10ms cycle
     if (now - last_update >= 10)
     {
       last_update = now;
@@ -268,28 +253,13 @@ void loop()
       offsetY = (float)(maxY - minY) / 2.0 + minY;
       offsetZ = (float)(maxZ - minZ) / 2.0 + minZ;
 
-      float zoom = 0;
-      zoom = (maxX - minX);
-      zoom = zoom > (maxY - minY) ? zoom : (maxY - minY);
-      zoom = zoom > (maxZ - minZ) ? zoom : (maxZ - minZ);
-      zoomX = zoom / (maxX - minX);
-      zoomY = zoom / (maxY - minY);
-      zoomZ = zoom / (maxZ - minZ);
-      if(zoomX < 0.9 || zoomX > 1.1)
-        zoomX = 1;//wait mag valid
-      if(zoomY < 0.9 || zoomY > 1.1)
-        zoomY = 1;//wait mag valid
-      if(zoomZ < 0.9 || zoomZ > 1.1)
-        zoomZ = 1;//wait mag valid
-      // filter.update(myICM.gyrX(), myICM.gyrY(), myICM.gyrZ(),
-      //               myICM.accX(), myICM.accY(), myICM.accZ(),
-      //               myICM.magX() + 7.5, -(myICM.magY() + 29), -(myICM.magZ() - 70));
       myAtt.update(DEGREES_TO_RADIANS(myICM.gyrY()), DEGREES_TO_RADIANS(myICM.gyrX()), -DEGREES_TO_RADIANS(myICM.gyrZ()),
                    myICM.accY(), myICM.accX(), -myICM.accZ(),
                    -(myICM.magY() - offsetY) , (myICM.magX() - offsetX)  , -(myICM.magZ() - offsetZ) , false, 0.01);
       // printScaledAGMT(&myICM);      // This function takes into account the scale settings from when the measurement was made to calculate the values with units
       // Serial.println(now);
-      // 1. 获取本体加速度（已转换为m/s²，包含重力）
+
+      // 1. get body acc
       pitch = DEGREES_TO_RADIANS(myAtt.Pitch);
       roll = DEGREES_TO_RADIANS(myAtt.Roll);
       heading = 0;
@@ -297,14 +267,14 @@ void loop()
       float ax = myICM.accX();
       float ay = myICM.accY();
       float az = myICM.accZ();
-      // 3. 扣除本体重力（参考之前的方法）
+
       float gx = sin(pitch) * 9.81;
       float gy = -sin(roll) * cos(pitch) * 9.81;
       float gz = cos(roll) * cos(pitch) * 9.81;
       float ax_no_g = ax - gx;
       float ay_no_g = ay - gy;
       float az_no_g = az - gz;
-      // 4. 旋转矩阵转换为ENU加速度（和Python版公式一致）
+
       float cosR = cos(roll), sinR = sin(roll);
       float cosP = cos(pitch), sinP = sin(pitch);
       float cosY = cos(heading), sinY = sin(heading);
@@ -313,16 +283,16 @@ void loop()
       float ay_enu = cosP * sinY * ax_no_g + (sinR * sinP * sinY + cosR * cosY) * ay_no_g + (cosR * sinP * sinY - sinR * cosY) * az_no_g;
       float az_enu = -sinP * ax_no_g + sinR * cosP * ay_no_g + cosR * cosP * az_no_g;
 
-      SERIAL_PORT.printf("att %f, %f, %f. gyro %f, %f, %f, zoom %f, %f, %f\n", myAtt.Pitch, myAtt.Roll, myAtt.Yaw, myICM.gyrX(), myICM.gyrY(), myICM.gyrZ(), zoomX, zoomY, zoomZ);
+      SERIAL_PORT.printf("att %f, %f, %f. gyro %f, %f, %f\n", myAtt.Pitch, myAtt.Roll, myAtt.Yaw, myICM.gyrX(), myICM.gyrY(), myICM.gyrZ());
 
       memset(&send, 0, sizeof(send));
       send.head = 0xA5;
       send.att[0] = myAtt.Pitch; // pitch
       send.att[1] = myAtt.Roll;  // roll
       send.att[2] = myAtt.Yaw;   // yaw
-      send.acc[0] = ax_enu;
-      send.acc[1] = ay_enu;
-      send.acc[2] = az_enu;
+      send.acc[0] = ax_enu;     // body acc x
+      send.acc[1] = ay_enu;     // body acc y
+      send.acc[2] = az_enu;     // body acc z
       uint8_t check = 0;
       check = crc8((uint8_t *)&send, sizeof(send) - 2);
       send.crc = check;
@@ -355,9 +325,6 @@ void loop()
   if (readyToPrint())
   {
     // print the heading, pitch and roll
-    roll = filter.getRoll();
-    pitch = filter.getPitch();
-    heading = filter.getYaw();
     ICM_20948_AGMT_t amgt = myICM.getAGMT();
     // Serial.print(heading);
     // Serial.print(",");

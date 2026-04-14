@@ -9,14 +9,19 @@
 #define SERIAL_PORT Serial
 
 Servo servoYaw, servoPitch;
-const int servoPinYaw = 15;   // 舵机信号接GPIO10
-const int servoPinPitch = 16; // 舵机信号接GPIO10
-const int laserPin = 17;      // 舵机信号接GPIO10
+const int servoPinYaw = 15;   // yaw servo GPIO15
+const int servoPinPitch = 16; // pitch servo GPIO16
+const int laserPin = 17;      // laser GPIO17
+
+#define YAW_ORIGIN_DEGREE (90)
+#define YAW_REVERSE (0)
+#define PITCH_ORIGIN_DEGREE (160)
+#define PITCH_REVERSE (1)
 
 #define CONSTRAINT_SERVO_YAW(a) (a < 0 ? 0 : (a > 180 ? 180 : a))
 #define CONSTRAINT_SERVO_PITCH(a) (a < 90 ? 90 : (a > 180 ? 180 : a))
-int16_t YawSet = 90, PitchSet = 160;
-int16_t YawSetLast = 90, PitchSetLast = 160;
+int16_t YawSet = YAW_ORIGIN_DEGREE, PitchSet = PITCH_ORIGIN_DEGREE;
+int16_t YawSetLast = YAW_ORIGIN_DEGREE, PitchSetLast = PITCH_ORIGIN_DEGREE;
 RingBuf<uint8_t, 256> uartBuff;
 motion myMotion(0.01);
 
@@ -38,20 +43,6 @@ bool laserOpen = false;
 
 esp_now_recv_cb_t cb;
 
-// CDC回调函数
-// void onSerialReceive()
-// {
-//   // while (Serial1.available())
-//   // {
-//   //   char c = Serial1.read();
-//   //   uartBuff.push(c);
-//   // }
-// }
-
-// 全局变量：标记是否有新帧（线程安全）
-portMUX_TYPE uart0_mux = portMUX_INITIALIZER_UNLOCKED;
-bool uart0_new_frame_flag = false;
-
 void setup()
 {
   SERIAL_PORT.begin(115200);
@@ -61,13 +52,12 @@ void setup()
   // Serial1.begin(115200, SERIAL_8N1, 10, 11);
   // Serial1.onReceive(onSerialReceive);
 
-  WiFi.mode(WIFI_STA); // ESP-NOW需要WiFi处于STA模式
-  // WiFi.channel(6); // 固定信道6，避免自动信道不匹配
-  //  初始化ESP-NOW
+  WiFi.mode(WIFI_STA); // ESP-NOW need config WIFI-STA mode
+  //  ESP-NOW init
   delay(2000);
   if (esp_now_init() != ESP_OK)
   {
-    SERIAL_PORT.println("ESP-NOW初始化失败");
+    SERIAL_PORT.println("ESP-NOW init error");
     return;
   }
   esp_now_register_recv_cb(OnDataRecv);
@@ -89,7 +79,6 @@ unsigned long last_update;
 // const esp_now_recv_info_t *
 void OnDataRecv(const esp_now_recv_info_t * esp_now_info, const uint8_t *data, int data_len)
 {
-  // Serial.print("收到数据，长度: ");
   // Serial.println(len);
   // Serial.println();
   for (size_t i = 0; i < data_len; i++)
@@ -101,20 +90,8 @@ void OnDataRecv(const esp_now_recv_info_t * esp_now_info, const uint8_t *data, i
 void loop()
 {
   unsigned long now = millis();
-  // 每10ms左右更新一次（非阻塞，允许±1ms误差）
-  if (now - last_update >= 20)
-  {
-    last_update = now;
 
-    // YawSet = filter.getYaw() - 180 + 90;
-    // YawSet = CONSTRAINT_SERVO_YAW(YawSet);
-    // servoYaw.write(YawSet);
-  }
-  else
-  {
-    // SERIAL_PORT.println("Waiting for data");
-  }
-
+  //About 10ms per frame
   if (uartBuff.size() >= sizeof(attFrame_T))
   {
     uint8_t head, tail;
@@ -150,9 +127,8 @@ void loop()
           from_angle += 360.0;
         if (to_angle < 0)
           to_angle += 360.0;
-        // 计算带符号的原始差值
+
         float delta = to_angle - from_angle;
-        // 转换为-180~180°范围
         if (delta > 180)
         {
           delta -= 360;
@@ -161,15 +137,25 @@ void loop()
         {
           delta += 360;
         }
-        YawSet = 90 + delta;
+
+        #if(YAW_REVERSE)
+        YawSet = YAW_ORIGIN_DEGREE - delta;
+        #else
+        YawSet = YAW_ORIGIN_DEGREE + delta;
+        #endif
         YawSet = CONSTRAINT_SERVO_YAW(YawSet);
-        PitchSet = 160 - (imu.att[0]);
+
+        #if(PITCH_REVERSE)
+        PitchSet = PITCH_ORIGIN_DEGREE - (imu.att[0]);
+        #else
+        PitchSet = PITCH_ORIGIN_DEGREE + (imu.att[0]);
+        #endif
         PitchSet = CONSTRAINT_SERVO_PITCH(PitchSet);
 
         if (imu.att[0] < -80)
         {
           YawSet = 0;
-          PitchSet = 160;
+          PitchSet = PITCH_ORIGIN_DEGREE;
           servoYaw.write(YawSet);
           servoPitch.write(PitchSet);
           refYaw = imu.att[2];
@@ -230,7 +216,7 @@ uint8_t crc8(uint8_t *data, uint8_t len)
     {
       if (crc & 0x80)
       {
-        crc = (crc << 1) ^ 0x31; // 多项式0x31 (x8+x5+x4+1)
+        crc = (crc << 1) ^ 0x31; // 0x31 (x8+x5+x4+1)
       }
       else
       {
